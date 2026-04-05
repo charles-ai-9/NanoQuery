@@ -1,50 +1,59 @@
 import os
-from langchain_openai import ChatOpenAI
+import logging
+from pathlib import Path
+from dotenv import load_dotenv
 
-# 单例模式
+logger = logging.getLogger(__name__)
+
+_project_root = Path(__file__).resolve().parent.parent.parent
+_env_path = _project_root / ".env"
+load_dotenv(dotenv_path=_env_path, override=True)
+
 _llm_instance = None
+
 
 def get_llm():
     global _llm_instance
     if _llm_instance is not None:
         return _llm_instance
 
-    # 1. 安全获取并清洗环境变量
-    raw_key = os.getenv("OPENAI_API_KEY", "").strip()
-    clean_key = "".join(c for c in raw_key if ord(c) < 128)
-
-    raw_model = os.getenv("MODEL_NAME", "Qwen/Qwen3-Coder-30B-A3B-Instruct").strip()
-    clean_model = "".join(c for c in raw_model if ord(c) < 128)
-
-    # 🚩 关键：获取中转地址
-    api_base = os.getenv("OPENAI_API_BASE", "").strip()
-
-    if not clean_key:
-        print("❌ 错误：.env 中未找到有效的 OPENAI_API_KEY")
-        return None
+    mode = os.getenv("LLM_MODE", "cloud").lower()
 
     try:
-        # 2. 按照 curl 的参数对齐初始化
-        # 2. 按照 OpenAI SDK 规范对齐初始化
-        _llm_instance = ChatOpenAI(
-            model=clean_model,
-            api_key=clean_key,
-            base_url=api_base if api_base else None,
-            temperature=0.7,
-            top_p=0.9,  # top_p 是标准参数，可以直接写在外面
-            model_kwargs={
-                # 🚩 核心修复：把非官方的自定义参数塞进 extra_body
-                "extra_body": {
-                    "repetition_penalty": 1.05,
-                    "chat_template_kwargs": {
-                        "enable_thinking": False
-                    }
-                }
-            },
-            timeout=60
-        )
-        print(f"✅ 大脑接入成功！地址: {api_base}")
+        if mode == "cloud":
+            from langchain_community.chat_models.tongyi import ChatTongyi
+            api_key = os.getenv("DASHSCOPE_API_KEY")
+            model_name = os.getenv("CLOUD_MODEL_NAME", "qwen-max")
+            if not api_key:
+                raise ValueError("未配置 DASHSCOPE_API_KEY，请检查 .env 文件")
+
+            _llm_instance = ChatTongyi(
+                model=model_name,
+                dashscope_api_key=api_key,
+                temperature=0.7,
+                top_p=0.9
+            )
+            logger.info("已切换至云端模式：通义千问 %s", model_name)
+
+        else:
+            from langchain_openai import ChatOpenAI
+            api_key = os.getenv("OPENAI_API_KEY")
+            api_base = os.getenv("OPENAI_API_BASE")
+            model_name = os.getenv("MODEL_NAME")
+            if not api_key:
+                raise ValueError("未配置 OPENAI_API_KEY，请检查 .env 文件")
+
+            _llm_instance = ChatOpenAI(
+                model=model_name,
+                api_key=api_key,
+                base_url=api_base,
+                temperature=0.7,
+                model_kwargs={"extra_body": {"chat_template_kwargs": {"enable_thinking": False}}}
+            )
+            logger.info("已切换至本地模式：自建模型 %s", model_name)
+
         return _llm_instance
+
     except Exception as e:
-        print(f"❌ 接入大模型失败: {e}")
+        logger.error("LLM 初始化失败 (模式: %s): %s", mode, str(e))
         return None

@@ -4,7 +4,7 @@
 
 # 1. AI 逻辑与图编排框架 (自动适配兼容的底层库)
 langchain>=0.3.0
-langchain-openai
+langchain-openai>=1.0.0
 langgraph>=0.3.0
 langchain-core>=0.3.0
 

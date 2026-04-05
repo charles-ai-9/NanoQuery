@@ -1,69 +1,57 @@
-"""
-rca_graph.py - 重案组（归因分析）子图
-
-【小白学习点】：
-1. 独立状态：RcaState 只关心 sql_result 和 analysis，这叫“最小必要原则”。
-2. 变量导出：最后的 rca_graph 变量是给主图 import 用的“工牌”。
-"""
-
 import os
 from typing import Dict, Any
 from typing_extensions import TypedDict
-
 from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_core.language_models.chat_models import BaseChatModel
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 
+# 🚩 核心修复：引入统一的 LLM 客户端
+from src.core.llm_client import get_llm
 
-# --- 1. 定义子图专属的“小工单” ---
+
+# --- 1. 定义子图专属状态 ---
 class RcaState(TypedDict):
-    sql_result: str  # 接收主图传来的查询结果
-    analysis: str  # 产出分析报告返回给主图
+    sql_result: str
+    analysis: str
 
 
-# --- 2. 构建 LLM 大脑 ---
-def _build_llm() -> BaseChatModel:
-    """如果有 Key 用真的，没 Key 用 Mock 的，保证程序不崩"""
-    if os.environ.get("OPENAI_API_KEY"):
-        from langchain_openai import ChatOpenAI
-        return ChatOpenAI(model="gpt-4o-mini", temperature=0.3)
-
-    from langchain_core.language_models.fake_chat_models import FakeListChatModel
-    return FakeListChatModel(
-        responses=[
-            "【重案组归因分析】\n检测到贷款申请下降 15%。\n原因：1. 竞品利率下调；2. 信用分准入从 400 提高到了 500；3. 流程耗时增加。"]
-    )
-
-
-_llm = _build_llm()
-
-
-# --- 3. 探员节点逻辑 ---
+# --- 2. 探员节点逻辑 ---
 async def rca_analyse_node(state: RcaState) -> Dict[str, Any]:
+    # 🚩 核心修复：直接获取单例 LLM
+    _llm = get_llm()
+
     sql_data = state.get("sql_result", "").strip()
-    if not sql_data:
+
+    # 增加一个防御逻辑：如果数据太长，先进行简单的截断或提示
+    if len(sql_data) > 5000:
+        sql_data = sql_data[:2500] + "\n...[数据过长已截断]...\n" + sql_data[-2500:]
+
+    if not sql_data or "空" in sql_data:
         return {"analysis": "未发现异常数据，无需归因。"}
 
+    # 在 rca_analyse_node 中加强提示词
     messages = [
-        SystemMessage(content="你是一名风控专家，请根据数据做归因分析。"),
-        HumanMessage(content=f"数据如下：\n{sql_data}")
+        SystemMessage(content=(
+            "你是一名金融风控专家。当用户要求'核查'异常数据时：\n"
+            "1. 首先锁定异常发生的具体日期和维度。\n"
+            "2. 必须生成 SQL 来查询该异常点背后的【明细数据】（如具体流水），而不是去看无关的表。\n"
+            "3. 对比该异常点与前后日期的分布差异。"
+        )),
+        HumanMessage(content=f"用户要求核查异常，已知前置汇总数据为：{sql_data}。请开始下钻分析。")
     ]
+
     response = await _llm.ainvoke(messages)
     return {"analysis": response.content}
 
 
-# --- 4. 组装子图 ---
+# --- 3. 组装子图 ---
 def build_rca_subgraph() -> CompiledStateGraph:
-    # 注意：这里我们给 StateGraph 实例起名叫 sg
     sg = StateGraph(RcaState)
     sg.add_node("rca_analyse_node", rca_analyse_node)
-    sg.add_edge(START, "rca_analyse_node")
+    sg.set_entry_point("rca_analyse_node")  # 替代 START 更加直观
     sg.add_edge("rca_analyse_node", END)
     return sg.compile()
 
 
-# 🔥 核心修复点：
-# 这里的变量名必须叫 rca_graph，因为你在 graph.py 里写的是 from ... import rca_graph
-# 而且必须加括号调用函数，拿到编译后的对象
+# 导出工牌
 rca_graph = build_rca_subgraph()

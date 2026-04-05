@@ -1,6 +1,6 @@
 from typing import Annotated, TypedDict, List
 from langchain_core.messages import BaseMessage
-from langgraph.graph.message import add_messages
+from langgraph.graph import add_messages
 
 class MessagesState(TypedDict):
     # add_messages 会让新消息自动追加到列表末尾，而不是覆盖
