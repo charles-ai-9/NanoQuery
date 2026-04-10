@@ -23,3 +23,13 @@ __pycache__/
 
 # --- 6. macOS 系统垃圾文件 ---
 .DS_Store
+
+
+# LangGraph 本地缓存与快照
+.langgraph_api/
+
+# 本地数据库与记忆存储
+data/memory/
+*.db
+*.db-shm
+*.db-wal
