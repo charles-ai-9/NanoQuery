@@ -27,7 +27,7 @@ from src.agent.subgraphs.rca_graph import rca_graph
 def intent_router(state: MessagesState):
     """交通警察逻辑，根据 route 字段决定流程分支"""
     # 获取 route 字段，默认为 business
-    route = state.get("route", "business")
+    route = getattr(state, "route", "business") or "business"
     # 如果 route 是 chat，流程直接结束
     if route == "chat":
         return END

@@ -1,5 +1,6 @@
 import logging
 from langchain_core.messages import AIMessage, SystemMessage, HumanMessage
+# 注意这里的导入路径，按你实际项目结构调整
 from .state import MessagesState
 from src.tools.sql_tools import execute_sql
 from functools import lru_cache
@@ -30,22 +31,19 @@ def initialize_llm(llm_instance):
 async def intent_node(state: MessagesState):
     """
     【前台探员】：负责意图识别与流量调度。
-    采用"物理拦截优先"的四道防线架构，确保在 Studio 等特殊环境下也能正确路由：
-      第一道：消息为空检查
-      第二道：关键字物理拦截（不依赖 LLM，100% 可靠）
-      第三道：LLM 初始化检查（失败时大声报错，不静默）
-      第四道：LLM 意图分类（正常路径）
     """
 
     # ── 第一道防线：消息为空检查 ──────────────────────────────────────────
-    if not state.get("messages"):
+    # 🛠️ 探长改造点 1：不再用 state.get("messages")，直接用 state.messages
+    # 因为 Pydantic 保证了即便没数据，它也是个空列表 []，绝不会报错
+    if not state.messages:
         logger.warning("intent_node: 消息列表为空，直接路由到 chat")
         return {"route": "chat"}
 
-    last_msg_content = state["messages"][-1].content.strip()
+    # 🛠️ 探长改造点 2：不再用 state["messages"]，直接用点语法
+    last_msg_content = state.messages[-1].content.strip()
 
     # ── 第二道防线：关键字物理拦截（不依赖 LLM）────────────────────────────
-    # 好处：即使 LLM 初始化失败，这些高频业务意图也能被正确路由
     META_KEYWORDS = ["表", "字段", "结构", "元数据", "有哪些表", "schema"]
     ANALYSIS_KEYWORDS = ["为什么", "原因", "分析", "归因", "排查"]
 
@@ -102,30 +100,26 @@ async def intent_node(state: MessagesState):
 async def check_data_freshness_node(state: MessagesState):
     """
     【哨兵探员】：负责环境感知。
-    在金融场景中，用户常问"今天的数据"，Agent必须知道数据库里"今天"到底指哪天。
     """
     date = "2024-12-23"
+    # 💡 架构师笔记：返回依然是字典！LangGraph 会自动把这个字典丢进 Pydantic 里做校验。
     return {"messages": [SystemMessage(content=f"当前数据截止到 {date}。")], "data_freshness": date}
 
 
 async def generate_sql_node(state: MessagesState):
     """
     【核心大脑】：ReAct 思想的物理载体。
-    它不仅写 SQL，还会根据上一轮的反馈（Observation）进行自我修正（Self-Correction）。
-    支持两种纠错场景：
-      - 工具执行报错：识别消息内容中的 ERROR 关键字，自动进入纠错模式。
-      - 人类导师干预：识别 HITL 中断后追加的 HumanMessage，据此重新生成 SQL。
     """
     _llm_with_tools = get_llm_with_tools()
 
-    messages = state["messages"]
+    # 🛠️ 探长改造点 3：不再用 state["messages"]，直接用点语法
+    messages = state.messages
     last_msg = messages[-1] if messages else None
     last_msg_content = last_msg.content if last_msg else ""
 
     correction_prompt = ""
 
-    # 场景 A：识别人类导师干预（优先级最高）
-    # 最后一条是 HumanMessage 且不是用户最初的提问（消息数 > 1）
+    # 场景 A：识别人类导师干预
     if isinstance(last_msg, HumanMessage) and len(messages) > 1:
         correction_prompt = (
             "\n[👨‍💼 人类导师反馈]\n"

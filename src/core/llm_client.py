@@ -17,7 +17,7 @@ def get_llm():
     if _llm_instance is not None:
         return _llm_instance
 
-    mode = os.getenv("LLM_MODE", "cloud").lower()
+    mode = os.getenv("LLM_MODE", "local").lower()
 
     try:
         if mode == "cloud":

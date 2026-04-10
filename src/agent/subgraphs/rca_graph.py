@@ -1,26 +1,27 @@
 import os
 from typing import Dict, Any
-from typing_extensions import TypedDict
+# 🚩 改造点 1：干掉 TypedDict，换成 Pydantic 的 BaseModel 和 Field
+from pydantic import BaseModel, Field
 from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 
-# 🚩 核心修复：引入统一的 LLM 客户端
 from src.core.llm_client import get_llm
 
 
-# --- 1. 定义子图专属状态 ---
-class RcaState(TypedDict):
-    sql_result: str
-    analysis: str
+# --- 1. 定义子图专属状态 (严苛的入职体检) ---
+# 🚩 改造点 2：继承 BaseModel，并给字段加上默认值防空指针
+class RcaState(BaseModel):
+    sql_result: str = Field(default="", description="传入的 SQL 查询结果")
+    analysis: str = Field(default="", description="输出的归因分析报告")
 
 
 # --- 2. 探员节点逻辑 ---
 async def rca_analyse_node(state: RcaState) -> Dict[str, Any]:
-    # 🚩 核心修复：直接获取单例 LLM
     _llm = get_llm()
 
-    sql_data = state.get("sql_result", "").strip()
+    # 🚩 改造点 3：抛弃 state.get()，直接使用面向对象的点语法 state.sql_result
+    sql_data = state.sql_result.strip()
 
     # 增加一个防御逻辑：如果数据太长，先进行简单的截断或提示
     if len(sql_data) > 5000:
@@ -41,6 +42,8 @@ async def rca_analyse_node(state: RcaState) -> Dict[str, Any]:
     ]
 
     response = await _llm.ainvoke(messages)
+
+    # 💡 架构师笔记：返回值依然是纯字典，LangGraph 会自动帮你塞进 RcaState 这个 BaseModel 里做校验
     return {"analysis": response.content}
 
 

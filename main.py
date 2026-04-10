@@ -83,7 +83,7 @@ async def main() -> None:
                 importlib.reload(src.agent.nodes)
                 importlib.reload(src.agent.graph)
 
-                graph = src.agent.graph.build_graph(memory)
+                graph = src.agent.graph.build_graph()
 
             except Exception as e:
                 print(f"⚠️ 代码语法有误: {e}")
