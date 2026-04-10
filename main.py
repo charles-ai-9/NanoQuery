@@ -36,7 +36,7 @@ def _new_config(thread_id: str, limit: int = 10) -> dict:
         "configurable": {
             "thread_id": thread_id,
             "user_name": "Jack探长",
-            "role": "admin"
+            "role": "admin"  # 可以修改为admin or user，来测试不同权限下的行为差异
         },
         "recursion_limit": limit,
         "run_name": f"Financial_Detective_{thread_id}",
