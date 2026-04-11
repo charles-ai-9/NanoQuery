@@ -82,8 +82,8 @@ async def main() -> None:
                 import src.agent.nodes, src.agent.graph
                 importlib.reload(src.agent.nodes)
                 importlib.reload(src.agent.graph)
-
-                graph = src.agent.graph.build_graph()
+                ## 需要传入memory来构建图，以便支持持久化记忆和人类在环的状态篡改
+                graph = src.agent.graph.build_graph(memory)
 
             except Exception as e:
                 print(f"⚠️ 代码语法有误: {e}")

@@ -33,22 +33,25 @@ def initialize_llm(llm_instance):
 
 
 # 🎧 改造点 1：给前台节点戴上隐形耳麦 (加入 config 参数)
+from langchain_core.runnables.config import RunnableConfig
+from langgraph.types import Command  # 依然引入，留作教学演示
+
+
 async def intent_node(state: MessagesState, config: RunnableConfig):
     """
     【前台探员】：负责意图识别与流量调度。
     """
-    # 🎧 探听耳麦情报：从总局(main.py)传来的 config 中提取身份信息
+    # 🎧 隐形耳麦：读取环境变量
     user_name = config.get("configurable", {}).get("user_name", "神秘长官")
     user_role = config.get("configurable", {}).get("role", "user")
 
-    # ── 第一道防线：消息为空检查 ──────────────────────────────────────────
     if not state.messages:
         logger.warning("intent_node: 消息列表为空，直接路由到 chat")
         return {"route": "chat"}
 
     last_msg_content = state.messages[-1].content.strip()
 
-    # ── 第二道防线：关键字物理拦截 ────────────────────────────
+    # ── 物理拦截 ────────────────────────────
     META_KEYWORDS = ["表", "字段", "结构", "元数据", "有哪些表", "schema"]
     ANALYSIS_KEYWORDS = ["为什么", "原因", "分析", "归因", "排查"]
 
@@ -62,23 +65,15 @@ async def intent_node(state: MessagesState, config: RunnableConfig):
             logger.info("intent_node: 关键字[%s]触发物理拦截 → analysis", kw)
             return {"messages": [AIMessage(content="【ANALYSIS】")], "route": "analysis"}
 
-    # ── 第三道防线：LLM 初始化检查 ─────────────────────────────────────────
     _llm = get_llm()
     if _llm is None:
         error_msg = "❌ 大模型初始化失败，请检查 .env 文件配置。"
         logger.error("intent_node: %s", error_msg)
         return {"messages": [AIMessage(content=error_msg)], "route": "chat"}
 
-    # ── 第四道防线：LLM 意图分类 ────────────────────────────────
+    # ── LLM 意图分类 ────────────────────────────────
     system_prompt = """你是一个极其严谨的金融数据库侦探前台。
-    请根据用户的输入进行分类。**严禁**将涉及数据库结构的询问误判为闲聊。
-
-    分类准则：
-    1. 【META】：询问数据库结构、元数据等。
-    2. 【BUSINESS】：查询具体业务数据、指标等。
-    3. 【ANALYSIS】：归因分析，问"为什么"。
-    4. 【CHAT】：纯粹打招呼、闲聊。
-
+    分类准则：【META】、【BUSINESS】、【ANALYSIS】、【CHAT】。
     回复格式要求：如果是 CHAT，回复 【CHAT】+幽默回复；其他只回复单单词标签。"""
 
     res = await _llm.ainvoke([SystemMessage(content=system_prompt), HumanMessage(content=last_msg_content)])
@@ -86,20 +81,31 @@ async def intent_node(state: MessagesState, config: RunnableConfig):
     logger.info("intent_node: LLM 分类结果 → %s", res_text[:50])
 
     if "CHAT" in res_text:
-        # ✨ 改造点 2：使用 config 里的名字进行个性化称呼
         reply = res.content.replace("【CHAT】", "").strip()
         personalized_reply = f"[权限验证通过：{user_role}] 敬礼！{user_name}！{reply}"
 
-        # ✨ 改造点 3：瞬间转移魔法！
-        # 如果是闲聊，直接在这里就宣告结案，强制跳到 __end__，不再走任何后续流程
-        return Command(
-            update={"messages": [AIMessage(content=personalized_reply)], "route": "chat"},
-            goto="__end__"
-        )
+        # =====================================================================
+        # 💡 【高阶架构笔记：Command 瞬间转移】
+        # 在极致追求代码简短的场景下，可以抛弃外部的 Conditional Edge，
+        # 直接使用 Command 强行跳转。
+        #
+        # 示例写法 (已被注释，仅供学习)：
+        # return Command(
+        #     update={"messages": [AIMessage(content=personalized_reply)], "route": "chat"},
+        #     goto="__end__"  # 直接传送到终点，跳过所有红绿灯
+        # )
+        # =====================================================================
+
+        # 🛡️ 【当前生产环境策略】：返回标准字典，由 graph.py 的全局路由(交警)统一接管，保证图纸清晰。
+        return {"messages": [AIMessage(content=personalized_reply)], "route": "chat"}
+
     elif "META" in res_text:
+        # 💡 [学习笔记] 如果用 Command，这里可以写：return Command(update={...}, goto="generate_sql")
         return {"messages": [res], "route": "meta"}
+
     elif "ANALYSIS" in res_text:
         return {"messages": [res], "route": "analysis"}
+
     else:
         return {"messages": [res], "route": "business"}
 
