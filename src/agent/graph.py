@@ -47,7 +47,8 @@ def intent_router(state: MessagesState):
 
 
 # 🛠️ 探长改造点 2：接收外部传来的 memory (支持外部注入持久化 SQLite)
-def build_graph(memory=None):
+# def build_graph(memory=None):
+def build_graph(memory=None, store=None):
     # 1. 初始化“接力棒”：告诉图所有节点都共享 MessagesState 这个账本
     builder = StateGraph(MessagesState)
 
@@ -113,6 +114,7 @@ def build_graph(memory=None):
 
     # --- 步骤 D：HITL 配置 (Human-in-the-Loop) ---
     # 最后，把这张蓝图"编译"成一个可执行的可操作对象
-    # checkpointer=memory：开启持久化，每步执行后保存状态快照，使用外部注入的记忆库
-    # interrupt_before=["tools"]：在 tools 节点执行前强制挂起，等待人工确认或修改
-    return builder.compile(checkpointer=memory, interrupt_before=["tools"])
+    # checkpointer=memory：开启持久化，每步执行后保存状态快照
+    # store=store：挂载全局情报局，让探员可以跨案卷读写用户画像 👈 新增！
+    # interrupt_before=["tools"]：在 tools 节点执行前强制挂起
+    return builder.compile(checkpointer=memory, store=store, interrupt_before=["tools"])

@@ -9,6 +9,8 @@ from .state import MessagesState
 from src.tools.sql_tools import execute_sql
 from functools import lru_cache
 from src.core.llm_client import get_llm
+from langgraph.store.base import BaseStore  # 用于类型提示
+from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
 
@@ -37,19 +39,59 @@ from langchain_core.runnables.config import RunnableConfig
 from langgraph.types import Command  # 依然引入，留作教学演示
 
 
-async def intent_node(state: MessagesState, config: RunnableConfig):
+# 🧠 【核心新增】：定义大模型强制输出的情报模具 (Pydantic Schema)
+class UserMemory(BaseModel):
+    has_preference: bool = Field(description="用户是否在这句话中明确表达了个人喜好、习惯、身份或人物特征？")
+    preference_content: str = Field(description="如果表达了特征，请提取具体内容(精简为短语，如'喜欢喝咖啡'、'我是审计部的')；如果没有，返回空字符串。")
+
+# 在函数参数里加上 store: BaseStore，向系统申请访问情报局的权限
+async def intent_node(state: MessagesState, config: RunnableConfig, store: BaseStore):
     """
-    【前台探员】：负责意图识别与流量调度。
+    【前台探员】：负责意图识别与流量调度，并搭载 LLM 智能记忆提取功能。
     """
-    # 🎧 隐形耳麦：读取环境变量
-    user_name = config.get("configurable", {}).get("user_name", "神秘长官")
-    user_role = config.get("configurable", {}).get("role", "user")
+    user_name = config.get("configurable", {}).get("user_name", "Jack")
+    user_role = config.get("configurable", {}).get("role", "admin")
 
     if not state.messages:
         logger.warning("intent_node: 消息列表为空，直接路由到 chat")
         return {"route": "chat"}
 
     last_msg_content = state.messages[-1].content.strip()
+
+    _llm = get_llm()
+    if _llm is None:
+        error_msg = "❌ 大模型初始化失败，请检查 .env 文件配置。"
+        logger.error("intent_node: %s", error_msg)
+        return {"messages": [AIMessage(content=error_msg)], "route": "chat"}
+
+    # =====================================================================
+    # 🕵️‍♂️ 跨 Session 侦查 (Store API) + LLM 智能提取 (Structured Output)
+    # =====================================================================
+    namespace = ("user_profiles", user_name)
+
+    # 1. 召唤一个专门负责提取记忆的 AI 分身，套上 Pydantic 模具
+    memory_extractor = _llm.with_structured_output(UserMemory)
+
+    try:
+        # 2. 审问这句话，强行要求输出 JSON
+        memory_result = await memory_extractor.ainvoke([
+            SystemMessage(
+                content="你是一个心理分析师，任务是从用户的日常对话中提取他们的长期偏好或个人特征。如果没有明确特征，不要凭空捏造。"),
+            HumanMessage(content=last_msg_content)
+        ])
+
+        # 3. 智能判断是否需要写入 SQLite Store (彻底消灭 if "我喜欢")
+        # 先确认大模型没有返回 None，再去读里面的属性
+        if memory_result and memory_result.has_preference and memory_result.preference_content:
+            await store.aput(namespace, "preference", {"likes": memory_result.preference_content})
+            logger.info(f"💾 [Store API]: 智能提取并持久化特征 -> [{memory_result.preference_content}]")
+    except Exception as e:
+        logger.warning(f"记忆提取环节发生异常 (非致命，跳过): {e}")
+
+    # 4. 读取最新情报，随时准备套近乎
+    profile = await store.aget(namespace, "preference")
+    known_preference = profile.value.get("likes") if profile else None
+    # =====================================================================
 
     # ── 物理拦截 ────────────────────────────
     META_KEYWORDS = ["表", "字段", "结构", "元数据", "有哪些表", "schema"]
@@ -65,12 +107,6 @@ async def intent_node(state: MessagesState, config: RunnableConfig):
             logger.info("intent_node: 关键字[%s]触发物理拦截 → analysis", kw)
             return {"messages": [AIMessage(content="【ANALYSIS】")], "route": "analysis"}
 
-    _llm = get_llm()
-    if _llm is None:
-        error_msg = "❌ 大模型初始化失败，请检查 .env 文件配置。"
-        logger.error("intent_node: %s", error_msg)
-        return {"messages": [AIMessage(content=error_msg)], "route": "chat"}
-
     # ── LLM 意图分类 ────────────────────────────────
     system_prompt = """你是一个极其严谨的金融数据库侦探前台。
     分类准则：【META】、【BUSINESS】、【ANALYSIS】、【CHAT】。
@@ -82,30 +118,19 @@ async def intent_node(state: MessagesState, config: RunnableConfig):
 
     if "CHAT" in res_text:
         reply = res.content.replace("【CHAT】", "").strip()
-        personalized_reply = f"[权限验证通过：{user_role}] 敬礼！{user_name}！{reply}"
 
-        # =====================================================================
-        # 💡 【高阶架构笔记：Command 瞬间转移】
-        # 在极致追求代码简短的场景下，可以抛弃外部的 Conditional Edge，
-        # 直接使用 Command 强行跳转。
-        #
-        # 示例写法 (已被注释，仅供学习)：
-        # return Command(
-        #     update={"messages": [AIMessage(content=personalized_reply)], "route": "chat"},
-        #     goto="__end__"  # 直接传送到终点，跳过所有红绿灯
-        # )
-        # =====================================================================
+        # 融合长期记忆进行回复
+        if known_preference:
+            personalized_reply = f"[权限: {user_role}] 敬礼！{user_name}！我知道您【{known_preference}】！{reply}"
+        else:
+            personalized_reply = f"[权限: {user_role}] 敬礼！{user_name}！{reply}"
 
-        # 🛡️ 【当前生产环境策略】：返回标准字典，由 graph.py 的全局路由(交警)统一接管，保证图纸清晰。
         return {"messages": [AIMessage(content=personalized_reply)], "route": "chat"}
 
     elif "META" in res_text:
-        # 💡 [学习笔记] 如果用 Command，这里可以写：return Command(update={...}, goto="generate_sql")
         return {"messages": [res], "route": "meta"}
-
     elif "ANALYSIS" in res_text:
         return {"messages": [res], "route": "analysis"}
-
     else:
         return {"messages": [res], "route": "business"}
 
