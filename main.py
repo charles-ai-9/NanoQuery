@@ -140,24 +140,34 @@ async def main() -> None:
                             for node_name, data in event.items():
                                 print(f"📍 [继续执行]: {node_name.upper()} 处理完毕")
 
+                    ## 👻 灵魂附体 (Update State) 实战演示
                     elif action == "edit":
                         new_sql = input("📝 请输入正确的 SQL: ")
 
-                        # 👻 核心科技：灵魂附体 (状态篡改)
-                        # 我们构造一条带有相同 ID 的新工具调用消息，直接覆盖原有的记忆
                         new_tool_call = {
                             "name": tool_call["name"],
                             "args": {"query": new_sql},
                             "id": tool_call["id"]
                         }
+
                         modified_msg = AIMessage(
-                            id=last_msg.id,  # 👈 关键：通过匹配 ID 来“覆盖”记忆
+                            # 🔑 关键操作 1：克隆 ID (id=last_msg.id)
+                            # 在 LangGraph 的底层逻辑里，如果传入的新消息没有 ID 或者是一个新 ID，系统会把它追加 (Append) 到案卷的最后面。
+                            # 但提取原来那句话的 last_msg.id，把带有相同 ID 的 modified_msg 塞进去时，就会触发“覆盖 (Overwrite)”机制。
+                            # 探员原本想执行的那个错误 SQL，就在物理层面上被彻底抹除了。
+                            id=last_msg.id,
                             content="探长暗中修改了我的记忆",
                             tool_calls=[new_tool_call]
                         )
 
-                        # 强行更新图的内部状态，as_node="generate_sql" 是伪装成大脑节点自己修改的
+                        # 🔑 关键操作 2：记忆注入 (aupdate_state)
+                        # 这是 LangGraph 提供的官方“篡改后门”。通过 aupdate_state 告诉系统：“去档案柜（SQLite）里，找到当前 config 对应的案卷，把里面的消息强制更新掉。”
+                        #
+                        # 🔑 关键操作 3：完美伪装 (as_node="generate_sql")
+                        # 如果只改了记忆，系统的“交通警察”会懵逼不知道下一步去哪。
+                        # 加上 as_node="generate_sql" 就等于戴上了“大脑节点”的人皮面具。系统会以为是大脑自己生成的，然后顺理成章把正确的 SQL 交给 tools 去执行。
                         await graph.aupdate_state(config, {"messages": [modified_msg]}, as_node="generate_sql")
+
                         print("👻 灵魂附体完成！探员的记忆已被修改，正在用新 SQL 查库...")
 
                         # 重新启动图，从断点继续
