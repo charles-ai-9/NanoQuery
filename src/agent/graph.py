@@ -4,6 +4,8 @@ graph.py - NanoQuery 拓扑升级：支持工具执行循环与物理装甲
 import sys
 import os
 
+
+
 # langgraph dev 加载此模块时 stdout 可能为 ASCII 编码
 # 在此处强制重绑定为 UTF-8，防止任何中文/emoji 输出触发 UnicodeEncodeError
 if hasattr(sys.stdout, "reconfigure"):
@@ -14,24 +16,19 @@ os.environ["PYTHONIOENCODING"] = "utf-8"
 
 from langgraph.graph import END, START, StateGraph
 from langgraph.prebuilt import ToolNode, tools_condition
-
-# 🛡️ 探长改造点 1：引入物理装甲材料
 from langgraph.types import RetryPolicy
 
 from src.agent.nodes import check_data_freshness_node, generate_sql_node, intent_node
 from src.agent.state import MessagesState
-from src.tools.sql_tools import execute_sql
+from src.tools.sql_tools import execute_sql, search_knowledge_base
 from src.agent.subgraphs.rca_graph import rca_graph
 
 
 # 意图路由器，根据当前会话状态决定流程走向
 # state: 当前的消息状态对象，包含上下文信息，封装好了后续用到
 def intent_router(state: MessagesState):
-    """【交通警察逻辑】：根据 route 字段决定流程分支"""
-
-    # 🛠️ 探长改造点 1：因为 state 已经是 Pydantic BaseModel，直接用点语法，优雅且绝对安全
+    """【交通警察】：根据 route 字段决定流程分支"""
     route = state.route
-
     # 如果 route 是 chat，流程直接结束
     if route == "chat":
         return END
@@ -46,10 +43,9 @@ def intent_router(state: MessagesState):
     return "check_freshness"
 
 
-# 🛠️ 探长改造点 2：接收外部传来的 memory (支持外部注入持久化 SQLite)
-# def build_graph(memory=None):
-def build_graph(memory=None, store=None):
-    # 1. 初始化“接力棒”：告诉图所有节点都共享 MessagesState 这个账本
+def _build_builder() -> StateGraph:
+    """内部公共函数：构建并返回未 compile 的 StateGraph builder，供两个入口共用"""
+    # 1. 初始化"接力棒"：告诉图所有节点都共享 MessagesState 这个账本
     builder = StateGraph(MessagesState)
 
     # ==========================================
@@ -63,13 +59,13 @@ def build_graph(memory=None, store=None):
 
     # --- 步骤 A：注册节点 (把探员领进办公室) ---
     # 🛡️ 给重度依赖大模型的节点穿上装甲！
-    builder.add_node("intent", intent_node, retry=network_armor)  # 前台：负责分流 (穿装甲)
-    builder.add_node("check_freshness", check_data_freshness_node)  # 哨兵：看数据新旧 (本地操作，无需装甲)
-    builder.add_node("generate_sql", generate_sql_node, retry=network_armor)  # 大脑：写 SQL (穿装甲)
+    builder.add_node("intent", intent_node, retry_policy=network_armor)
+    builder.add_node("check_freshness", check_data_freshness_node)
+    builder.add_node("generate_sql", generate_sql_node, retry_policy=network_armor)
 
     # ToolNode 是官方提供的特殊节点，专门用来执行被 bind 的工具（如 execute_sql）
     # 这是 LangGraph 最强大的地方，它允许你把非标准函数也包装成节点
-    builder.add_node("tools", ToolNode([execute_sql]))
+    builder.add_node("tools", ToolNode([execute_sql,search_knowledge_base]))
 
     # 挂载子图：把另一个小团队（重案组）作为一个整体节点塞进来
     builder.add_node("rca_subgraph", rca_graph)
@@ -112,9 +108,21 @@ def build_graph(memory=None, store=None):
     # 这样大脑才能看到 SQL 执行的结果，如果报错了，大脑可以根据报错重新写 SQL
     builder.add_edge("tools", "generate_sql")
 
-    # --- 步骤 D：HITL 配置 (Human-in-the-Loop) ---
-    # 最后，把这张蓝图"编译"成一个可执行的可操作对象
-    # checkpointer=memory：开启持久化，每步执行后保存状态快照
-    # store=store：挂载全局情报局，让探员可以跨案卷读写用户画像 👈 新增！
-    # interrupt_before=["tools"]：在 tools 节点执行前强制挂起
-    return builder.compile(checkpointer=memory, store=store, interrupt_before=["tools"])
+    return builder
+
+
+def build_graph():
+    """供 LangGraph Studio/Server 框架调用。
+    新版 langgraph-api >= 0.7.95 要求工厂函数必须无参数，
+    checkpointer 和 store 由框架在运行时自动注入。"""
+    return _build_builder().compile(interrupt_before=["tools"])
+
+
+def build_graph_with_deps(memory=None, store=None):
+    """供 main.py 本地运行调用。
+    手动传入 checkpointer (memory) 和 store，实现持久化与长期记忆。"""
+    return _build_builder().compile(
+        checkpointer=memory,
+        store=store,
+        interrupt_before=["tools"]
+    )

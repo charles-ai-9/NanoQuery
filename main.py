@@ -7,6 +7,18 @@ import warnings
 import importlib
 from pathlib import Path
 from dotenv import load_dotenv
+import logging
+
+# 这是你原有的全局设置
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# 👇 新增这行“消音代码”：强制让 httpx 只有在发生警告或错误时才说话
+logging.getLogger("httpx").setLevel(logging.WARNING)
+
+# 如果你嫌 transformers 相关的加载日志也烦，也可以顺手静音：
+logging.getLogger("sentence_transformers").setLevel(logging.WARNING)
+
 
 # --- 1. 环境初始化 ---
 if hasattr(sys.stdout, "reconfigure"):
@@ -99,8 +111,8 @@ async def main() -> None:
                         importlib.reload(src.agent.nodes)
                         importlib.reload(src.agent.graph)
 
-                        # 编译 Graph，同时注入 Checkpointer 和 Store
-                        graph = src.agent.graph.build_graph(memory, store=global_store)
+                        # 本地运行：调用 build_graph_with_deps，手动注入 checkpointer 和 store
+                        graph = src.agent.graph.build_graph_with_deps(memory, store=global_store)
 
                     except Exception as e:
                         print(f"⚠️ Graph 编译异常: {e}")
