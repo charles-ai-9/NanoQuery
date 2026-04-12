@@ -2,21 +2,39 @@
 # NanoQuery 金融侦探项目 - 最终环境依赖清单
 # ==========================================
 
-# 1. AI 逻辑与图编排框架 (自动适配兼容的底层库)
+# 1. AI 逻辑与图编排框架
 langchain>=0.3.0
+langchain-core>=0.3.0
 langchain-openai>=1.0.0
 langgraph>=0.3.0
-langchain-core>=0.3.0
+langchain_community>=0.0.30
+langchain_text_splitters>=0.0.1
 
-# 2. 数据库与 Web 通信
+# 2. 检索与嵌入（Hybrid RAG 必需）
+faiss-cpu>=1.7.4
+transformers>=4.36.2
+sentence-transformers>=2.2.2
+rank-bm25>=0.2.2
+
+# 3. 数据库与 Web 通信
 SQLAlchemy>=2.0.0
 requests
 python-dotenv
 
-# 3. 数据校验与异步底层
+# 4. 数据校验与异步底层
 pydantic>=2.0.0
 typing_extensions>=4.0.0
 anyio
+tqdm
 
-# 4. 辅助增强 (如已在代码中使用)
+# 5. 辅助增强
 langchain-github-copilot
+
+# 6. 监控与可视化（可选）
+langsmith>=0.0.80
+
+# 7. 兼容性与性能优化（可选）
+huggingface-hub>=0.20.3
+
+# 8. 其他（如有需要可补充）
+# ...

@@ -31,9 +31,10 @@ def get_llm():
                 model=model_name,
                 dashscope_api_key=api_key,
                 temperature=0.7,
-                top_p=0.9
+                top_p=0.9,
+                streaming=True  # 👈 核心修改：开启云端大模型的流式输出
             )
-            logger.info("已切换至云端模式：通义千问 %s", model_name)
+            logger.info("已切换至云端模式：通义千问 %s (已开启 Streaming)", model_name)
 
         else:
             from langchain_openai import ChatOpenAI
@@ -48,9 +49,10 @@ def get_llm():
                 api_key=api_key,
                 base_url=api_base,
                 temperature=0.7,
+                streaming=True, # 👈 核心修改：开启本地/兼容大模型的流式输出
                 model_kwargs={"extra_body": {"chat_template_kwargs": {"enable_thinking": False}}}
             )
-            logger.info("已切换至本地模式：自建模型 %s", model_name)
+            logger.info("已切换至本地模式：自建模型 %s (已开启 Streaming)", model_name)
 
         return _llm_instance
 
