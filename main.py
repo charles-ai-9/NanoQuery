@@ -71,7 +71,7 @@ async def process_stream(graph_obj, state_input, run_config):
             kind = event["event"]
             node_name = event.get("metadata", {}).get("langgraph_node", "")
 
-            # 🎯 进度直播：监控工具启动
+            # 🎯 进度直播：监控工具启动，每个节点的进度的播报
             if kind == "on_tool_start":
                 tool_name = event["name"]
                 if tool_name == "execute_sql":
@@ -81,7 +81,7 @@ async def process_stream(graph_obj, state_input, run_config):
                 else:
                     print(f"\n\033[96m[⚙️ 系统播报: 探员正在调用工具 {tool_name}...]\033[0m\n", end="", flush=True)
 
-            # 🎯 打字机效果：捕捉大模型 Token
+            # 🎯 打字机效果：捕捉大模型 Token，一个一个的吐给用户看。同时要注意streaming=True这个配置，不然事件流里是拿不到 chunk 的。
             elif kind == "on_chat_model_stream":
                 # 过滤掉内部意图识别节点的输出，只显示最终回答节点的文字
                 if node_name not in ["intent", "check_freshness"]:
@@ -141,8 +141,10 @@ async def main() -> None:
                     try:
                         # 每次运行重新加载，方便调试修改后的代码
                         import src.agent.nodes, src.agent.graph
+                        ## 动态加载模块，确保每次修改后都能生效（适合开发调试阶段，生产环境建议去掉）
                         importlib.reload(src.agent.nodes)
                         importlib.reload(src.agent.graph)
+
                         graph = src.agent.graph.build_graph_with_deps(memory, store=global_store)
                     except Exception as e:
                         print(f"⚠️ Graph 编译异常: {e}")
@@ -166,7 +168,6 @@ async def main() -> None:
                             last_msg = current_state.values["messages"][-1]
                             if hasattr(last_msg, "tool_calls") and last_msg.tool_calls:
                                 for tc in last_msg.tool_calls:
-                                    # ✅ 修复了这里的语法错误 (补充了 print)
                                     print(
                                         f"🔍 拟执行任务: \033[93m{tc['name']}\033[0m | 参数: \033[93m{tc['args']}\033[0m")
 

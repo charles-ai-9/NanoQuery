@@ -57,7 +57,10 @@ async def intent_node(state: MessagesState, config: RunnableConfig, store: BaseS
         error_msg = "❌ 大模型初始化失败，请检查 .env 文件配置。"
         logger.error("intent_node: %s", error_msg)
         return {"messages": [AIMessage(content=error_msg)], "route": "chat"}
+    ## LangGraph 强制要求用元组做 Namespace。 用元组是Python语言体系的一个设计套路，类似于目录层级结构。
     namespace = ("user_profiles", user_name)
+    ## 强行约束大模型，让它必须、只能、且完美地按照 UserMemory 这个类定义的格式返回数据。
+    ## 自动把 UserMemory 的结构转换成大模型能听懂的“函数定义”或“JSON Schema”发过去
     memory_extractor = _llm.with_structured_output(UserMemory)
     try:
         memory_result = await memory_extractor.ainvoke([
@@ -66,14 +69,19 @@ async def intent_node(state: MessagesState, config: RunnableConfig, store: BaseS
             HumanMessage(content=last_msg_content)
         ])
         if memory_result and memory_result.has_preference and memory_result.preference_content:
+            ## .aput = Asynchronous Put 异步”操作
             await store.aput(namespace, "preference", {"likes": memory_result.preference_content})
+            ## 结构化后的数据方便我们直接拿来用：memory_result.preference_content
             logger.info(f"💾 [Store API]: 智能提取并持久化特征 -> [{memory_result.preference_content}]")
     except Exception as e:
         logger.warning(f"记忆提取环节发生异常 (非致命，跳过): {e}")
     profile = await store.aget(namespace, "preference")
+
+   #================================= 物理拦截模式（快通道）：基于关键词的硬规则优先级最高 =================================
     known_preference = profile.value.get("likes") if profile else None
     META_KEYWORDS = ["表", "字段", "结构", "元数据", "有哪些表", "schema"]
     ANALYSIS_KEYWORDS = ["为什么", "原因", "分析", "归因", "排查"]
+
     for kw in META_KEYWORDS:
         if kw in last_msg_content:
             logger.info("intent_node: 关键字[%s]触发物理拦截 → meta", kw)
@@ -82,6 +90,8 @@ async def intent_node(state: MessagesState, config: RunnableConfig, store: BaseS
         if kw in last_msg_content:
             logger.info("intent_node: 关键字[%s]触发物理拦截 → analysis", kw)
             return {"messages": [AIMessage(content="【ANALYSIS】")], "route": "analysis"}
+    # ===============================大模型（慢通道）====================================================
+
     system_prompt = """你是一个极其严谨的星际金融风控局前台接待员（意图路由器）。
         请严格根据用户的输入，将其划分到以下四个意图之一：
 
@@ -105,8 +115,10 @@ async def intent_node(state: MessagesState, config: RunnableConfig, store: BaseS
     res = await _llm.ainvoke([SystemMessage(content=system_prompt), HumanMessage(content=last_msg_content)])
     res_text = res.content.upper()
     logger.info("intent_node: LLM 分类结果 → %s", res_text[:50])
+
     if "CHAT" in res_text:
         reply = res.content.replace("【CHAT】", "").strip()
+        ## 在闲聊的情况下，如果之前记忆里提取到了用户的偏好特征，就把它优雅地融入回复里，增加个性化和温度。
         if known_preference:
             personalized_reply = f"[权限: {user_role}] 敬礼！{user_name}！我知道您【{known_preference}】！{reply}"
         else:
@@ -125,29 +137,40 @@ async def check_data_freshness_node(state: MessagesState):
 
 async def generate_sql_node(state: MessagesState, config: RunnableConfig):
     _llm_with_tools = get_llm_with_tools()
+
+    ## 可以根据 config 里的用户信息动态调整提示词，增强个性化和安全性。「在每个节点都可以用到」
     user_name = config.get("configurable", {}).get("user_name", "未知员工")
     user_role = config.get("configurable", {}).get("role", "user")
+
     messages = state.messages
     last_msg = messages[-1] if messages else None
     last_msg_content = last_msg.content if last_msg else ""
+
     correction_prompt = ""
+
+    # 情景A：人类导师反馈纠错
+    # isinstance(last_msg, HumanMessage)：最后一条消息必须是人类发出的。
     if isinstance(last_msg, HumanMessage) and len(messages) > 1:
         correction_prompt = (
             "\n[👨‍💼 人类导师反馈]\n"
             f"反馈内容：{last_msg_content}\n"
             "请仔细阅读上述人类反馈修正 SQL。如果提供了完整 SQL 则原封不动执行。"
         )
+
+    # 情景B：系统级物理纠错
     elif "ERROR" in last_msg_content:
         correction_prompt = (
             "\n[🚩 紧急纠错指令]\n"
             f"错误信息为: {last_msg_content}\n"
             "请分析原因修正 SQL 后再次调用。"
         )
+
     role_instruction = ""
     if user_role == "admin":
         role_instruction = f"3. 【权限最高级】：当前操作者是 {user_name} (Admin)，拥有所有数据库表的无限制查询权限。"
     else:
         role_instruction = f"3. 【权限受限】：当前操作者是 {user_name} ({user_role})，生成的 SQL 必须严格限制范围，严禁查询薪酬、密码等高管敏感表！"
+
     sys_instruction = SystemMessage(content=(
         "你是一个严谨的金融 SQL 侦探。\n"
         "1. 严禁幻觉：必须且只能使用 `execute_sql` 获取数据。\n"
@@ -155,6 +178,7 @@ async def generate_sql_node(state: MessagesState, config: RunnableConfig):
         f"{role_instruction}\n"
         f"{correction_prompt}"
     ))
+
     input_msgs = [sys_instruction] + messages[-10:]
     try:
         logger.info(f"generate_sql_node: 正在调度 AI... [当前权限: {user_role}]")

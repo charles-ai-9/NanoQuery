@@ -57,7 +57,7 @@ def _build_builder() -> StateGraph:
         max_attempts=3         # 最多重试3次
     )
 
-    # --- 步骤 A：注册节点 (把探员领进办公室) ---
+    # ============== 步骤 A：注册节点 (把探员领进办公室) ==============
     # 🛡️ 给重度依赖大模型的节点穿上装甲！
     builder.add_node("intent", intent_node, retry_policy=network_armor)
     builder.add_node("check_freshness", check_data_freshness_node)
@@ -70,7 +70,8 @@ def _build_builder() -> StateGraph:
     # 挂载子图：把另一个小团队（重案组）作为一个整体节点塞进来
     builder.add_node("rca_subgraph", rca_graph)
 
-    # -------------- 步骤 B：布置走廊 (连线逻辑) ----------------
+
+    # ============== 步骤 B：布置走廊 (连线逻辑) ==============
     # 入口：程序一启动，必先经过“前台”
     builder.add_edge(START, "intent")
 
